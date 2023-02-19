@@ -12,7 +12,7 @@ import torch
 from PySide6.QtCore import Qt, Signal, QSize, Slot, QRunnable, QObject, QThreadPool
 from PySide6.QtGui import QPixmap, QImage, QIcon
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QPushButton, QLabel, QHBoxLayout, QVBoxLayout, \
-    QWidget, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QGridLayout, QListWidgetItem, QListWidget
+    QWidget, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QGridLayout, QListWidgetItem, QListWidget, QCheckBox
 from PIL import Image
 from diffusers import StableDiffusionInstructPix2PixPipeline, StableDiffusionUpscalePipeline
 
@@ -189,6 +189,8 @@ class MainWindow(QMainWindow):
 
 
         # Assemble the grid PNG files into an animated GIF
+        self.input_list.clear()
+        self.output_list.clear()
         worker = Worker(self.assemble_gif_from_grids)
         self.threadpool.start(worker)
         #self.assemble_gif_from_grids()
@@ -319,15 +321,16 @@ class MainWindow(QMainWindow):
                     input_item = QListWidgetItem(QIcon(input_image_pixmap), "")
                     self.output_signal.emit(input_item)
                     #output_list.addItem(input_item)
-                    """frame = self.upscaler(prompt= self.pipewidget.negative_prompt_edit.text(),
-                                            image = frame,
-                                            #num_inference_steps = self.pipewidget.num_inference_steps_spin.value(),
-                                            guidance_scale= self.pipewidget.guidance_scale_spin.value(),
-                                            noise_level = 20,
-                                            negative_prompt = None,
-                                            num_images_per_prompt = 1,
-                                            eta=0.0,
-                                            generator=generator).images[0]"""
+                    if self.pipewidget.use_upscaler.isChecked() == True:
+                        frame = self.upscaler(prompt= self.pipewidget.negative_prompt_edit.text(),
+                                                image = frame,
+                                                #num_inference_steps = self.pipewidget.num_inference_steps_spin.value(),
+                                                guidance_scale= self.pipewidget.guidance_scale_spin.value(),
+                                                noise_level = 20,
+                                                negative_prompt = None,
+                                                num_images_per_prompt = 1,
+                                                eta=0.0,
+                                                generator=generator).images[0]
 
                     frames.append(frame)
         # Calculate the frame duration based on the number of frames
@@ -368,6 +371,7 @@ class PipelineWidget(QWidget):
         self.grid_width = QSpinBox()
         self.grid_height = QSpinBox()
         self.update_button = QPushButton("Update Parameters")
+        self.use_upscaler = QCheckBox("Use Stable Diffusion X4 Upscaler")
 
         # Set default values for each parameter
         self.prompt_edit.setText("")
@@ -458,8 +462,9 @@ class PipelineWidget(QWidget):
         dimensions_layout.addWidget(self.grid_height)
 
         # Create a layout for the update button
-        update_button_layout = QHBoxLayout()
-        update_button_layout.addWidget(self.update_button)
+        update_button_layout = QVBoxLayout()
+        update_button_layout.addWidget(self.use_upscaler)
+        #update_button_layout.addWidget(self.update_button)
 
         # Create a grid layout to hold all the parameter controls
         grid_layout = QGridLayout()
@@ -469,7 +474,7 @@ class PipelineWidget(QWidget):
         grid_layout.addLayout(guidance_scale_layout, 3, 0)
         grid_layout.addLayout(image_guidance_scale_layout, 4, 0)
         grid_layout.addLayout(negative_prompt_layout, 5, 0)
-        grid_layout.addLayout(num_images_per_prompt_layout, 6, 0)
+        #grid_layout.addLayout(num_images_per_prompt_layout, 6, 0)
         grid_layout.addLayout(eta_layout, 7, 0)
         grid_layout.addLayout(generator_layout, 8, 0)
         grid_layout.addLayout(dimensions_layout, 9, 0)
@@ -477,7 +482,7 @@ class PipelineWidget(QWidget):
         grid_layout.addLayout(update_button_layout, 15, 0)
 
         # Connect the update button to a slot that emits the parameters_updated signal
-        self.update_button.clicked.connect(self.emit_parameters_updated_signal)
+        #self.update_button.clicked.connect(self.emit_parameters_updated_signal)
 
         # Set the main layout of the widget
         self.setLayout(grid_layout)
