@@ -2,13 +2,14 @@ import datetime
 import re
 import secrets
 import sys
+import traceback
 
 import cv2
 import os
 
 import numpy as np
 import torch
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, Slot, QRunnable, QObject, QThreadPool
 from PySide6.QtGui import QPixmap, QImage, QIcon
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QPushButton, QLabel, QHBoxLayout, QVBoxLayout, \
     QWidget, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QGridLayout, QListWidgetItem, QListWidget
@@ -16,6 +17,8 @@ from PIL import Image
 from diffusers import StableDiffusionInstructPix2PixPipeline, StableDiffusionUpscalePipeline
 
 class MainWindow(QMainWindow):
+    output_signal = Signal(object)
+    grid_signal = Signal(object)
     def __init__(self):
         super().__init__()
 
@@ -60,6 +63,41 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         self.pipewidget = PipelineWidget()
         self.pipewidget.show()
+        self.grid_signal.connect(self.grid_preview_func)
+        self.output_signal.connect(self.output_preview_func)
+        self.threadpool = QThreadPool()
+        self.init_process_window()
+    def init_process_window(self):
+        self.process_window = QWidget()
+        layout = QGridLayout()
+        self.process_window.setLayout(layout)
+        self.input_list = QListWidget()
+        self.input_list.setIconSize(QSize(256, 256))
+        self.output_list = QListWidget()
+        self.output_list.setIconSize(QSize(256, 256))
+        layout.addWidget(QLabel("Input Images"), 0, 0)
+        layout.addWidget(self.input_list, 1, 0)
+        layout.addWidget(QLabel("Cropped Images"), 0, 1)
+        layout.addWidget(self.output_list, 1, 1)
+        self.process_window.show()
+
+    def init_preview_window(self):
+        self.window = QWidget()
+        layout = QHBoxLayout()
+
+        list_widget = QListWidget()
+        layout.addWidget(list_widget)
+        list_widget.setIconSize(QSize(256, 256))
+        self.window.setLayout(layout)
+        self.window.show()
+        return list_widget
+
+    @Slot(object)
+    def grid_preview_func(self, image):
+        self.input_list.addItem(image)
+    @Slot(object)
+    def output_preview_func(self, image):
+        self.output_list.addItem(image)
 
     def load_video(self):
         # Open a file dialog to select a video file
@@ -83,15 +121,7 @@ class MainWindow(QMainWindow):
         grid_pos = (0, 0)
 
         # Create a new window with a QListWidget
-        self.window = QWidget()
-        layout = QHBoxLayout()
-
-        list_widget = QListWidget()
-        layout.addWidget(list_widget)
-        list_widget.setIconSize(QSize(256, 256))
-        self.window.setLayout(layout)
-        self.window.show()
-
+        list_widget = self.init_preview_window()
         # Loop over frames in the video
         frame_num = 0
         os.makedirs("grid", exist_ok=True)
@@ -159,7 +189,9 @@ class MainWindow(QMainWindow):
 
 
         # Assemble the grid PNG files into an animated GIF
-        self.assemble_gif_from_grids()
+        worker = Worker(self.assemble_gif_from_grids)
+        self.threadpool.start(worker)
+        #self.assemble_gif_from_grids()
 
     def preview_video_frame(self):
         # Open the video file using cv2
@@ -236,7 +268,7 @@ class MainWindow(QMainWindow):
         # Release the video file
         cap.release()
 
-    def assemble_gif_from_grids(self):
+    def assemble_gif_from_grids(self, progress_callback=None):
         # Get a list of all the grid PNG files in the folder
         grid_files = [filename for filename in os.listdir(self.grid_path) if filename.endswith("png")]
 
@@ -250,7 +282,6 @@ class MainWindow(QMainWindow):
         # Define the target frame size and grid size
         target_size = (self.pipewidget.image_width.value(), self.pipewidget.image_height.value())
         grid_size = (1024, 1024)
-
         # Initialize the list of frames
         frames = []
         try:
@@ -271,12 +302,24 @@ class MainWindow(QMainWindow):
                                    generator=generator
                                    ).images[0]
 
+            input_image_np = np.array(grid_image)
+            input_image_pixmap = QPixmap.fromImage(
+                QImage(input_image_np.data, input_image_np.shape[1], input_image_np.shape[0], QImage.Format_RGB888))
+            input_item = QListWidgetItem(QIcon(input_image_pixmap), "")
+            self.grid_signal.emit(input_item)
+            #input_list.addItem(input_item)
 
             for y in range(0, grid_image.height, target_size[1]):
                 for x in range(0, grid_image.width, target_size[0]):
                     frame = grid_image.crop((x, y, x+target_size[0], y+target_size[1]))
-
-                    frame = self.upscaler(prompt= self.pipewidget.negative_prompt_edit.text(),
+                    input_image_np = np.array(frame)
+                    input_image_pixmap = QPixmap.fromImage(
+                        QImage(input_image_np.data, input_image_np.shape[1], input_image_np.shape[0],
+                               QImage.Format_RGB888))
+                    input_item = QListWidgetItem(QIcon(input_image_pixmap), "")
+                    self.output_signal.emit(input_item)
+                    #output_list.addItem(input_item)
+                    """frame = self.upscaler(prompt= self.pipewidget.negative_prompt_edit.text(),
                                             image = frame,
                                             #num_inference_steps = self.pipewidget.num_inference_steps_spin.value(),
                                             guidance_scale= self.pipewidget.guidance_scale_spin.value(),
@@ -284,7 +327,7 @@ class MainWindow(QMainWindow):
                                             negative_prompt = None,
                                             num_images_per_prompt = 1,
                                             eta=0.0,
-                                            generator=generator).images[0]
+                                            generator=generator).images[0]"""
 
                     frames.append(frame)
         # Calculate the frame duration based on the number of frames
@@ -459,6 +502,75 @@ class PipelineWidget(QWidget):
             "callback_steps": self.callback_steps_spin.value()
         }
         self.parameters_updated.emit(parameters)
+class WorkerSignals(QObject):
+    """
+    Defines the signals available from a running worker thread.
+
+    Supported signals are:
+
+    finished
+        No data
+
+    error
+        tuple (exctype, value, traceback.format_exc() )
+
+    result
+        object data returned from processing, anything
+
+    progress
+        int indicating % progress
+
+    """
+
+    finished = Signal()
+    error = Signal(tuple)
+    result = Signal(object)
+    progress = Signal(int)
+
+
+class Worker(QRunnable):
+    """
+    Worker thread
+
+    Inherits from QRunnable to handler worker thread setup, signals and wrap-up.
+
+    :param callback: The function callback to run on this worker thread. Supplied args and
+                     kwargs will be passed through to the runner.
+    :type callback: function
+    :param args: Arguments to pass to the callback function
+    :param kwargs: Keywords to pass to the callback function
+
+    """
+
+    def __init__(self, fn, lock=False, *args, **kwargs):
+        super(Worker, self).__init__()
+
+        # Store constructor arguments (re-used for processing)
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.signals = WorkerSignals()
+        self.lock = lock
+        # Add the callback to our kwargs
+        self.kwargs["progress_callback"] = self.signals.progress
+
+    @Slot()
+    def run(self):
+        """
+        Initialise the runner function with passed args, kwargs.
+        """
+
+        # Retrieve args/kwargs here; and fire processing using them
+        try:
+            result = self.fn(*self.args, **self.kwargs)
+        except:
+            traceback.print_exc()
+            exctype, value = sys.exc_info()[:2]
+            self.signals.error.emit((exctype, value, traceback.format_exc()))
+        else:
+            self.signals.result.emit(result)  # Return the result of the processing
+        finally:
+            self.signals.finished.emit()  # Done
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
